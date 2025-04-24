@@ -790,14 +790,26 @@ async function findMethod(rootPath, methodName, currentFilePath) {
     return null;
 }
 
+// Cache for file content and search results
+const fileContentCache = new Map();
+const referenceSearchCache = new Map();
+
 /**
- * Find all references to a given word in the project
+ * Find all references to a given word in the project or current file
  * @param {string} word - The word to find references for
  * @param {string} currentFilePath - The current file path
+ * @param {boolean} currentFileOnly - Whether to search only in the current file
  * @returns {Promise<Array<{filePath: string, line: number, column: number}>>}
  */
-async function findAllReferences(word, currentFilePath) {
+async function findAllReferences(word, currentFilePath, currentFileOnly = false) {
     try {
+        // Check cache for previous searches
+        const cacheKey = `${word}-${currentFileOnly ? 'file' : 'project'}-${currentFileOnly ? currentFilePath : ''}`;
+        if (referenceSearchCache.has(cacheKey)) {
+            console.log(`Using cached results for ${word}`);
+            return referenceSearchCache.get(cacheKey);
+        }
+        
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             return [];
@@ -806,9 +818,28 @@ async function findAllReferences(word, currentFilePath) {
         const rootPath = workspaceFolders[0].uri.fsPath;
         console.log(`Searching for references to '${word}' in project root: ${rootPath}`);
         
-        // Get all Ruby files in the project
-        const rubyFiles = glob.sync('**/*.rb', { cwd: rootPath });
-        console.log(`Found ${rubyFiles.length} Ruby files to search`);
+        // Determine which files to search
+        let filesToSearch = [];
+        if (currentFileOnly) {
+            // Only search the current file
+            const relativePath = path.relative(rootPath, currentFilePath);
+            filesToSearch = [relativePath];
+            console.log(`Searching only in current file: ${relativePath}`);
+        } else {
+            // Search all Ruby files in the project, excluding common binary and generated files
+            filesToSearch = glob.sync('**/*.rb', { 
+                cwd: rootPath,
+                ignore: [
+                    'node_modules/**',
+                    'vendor/**',
+                    'tmp/**',
+                    'log/**',
+                    'coverage/**',
+                    'public/assets/**'
+                ]
+            });
+            console.log(`Found ${filesToSearch.length} Ruby files to search`);
+        }
         
         // Store all the references we find
         const references = [];
@@ -825,56 +856,111 @@ async function findAllReferences(word, currentFilePath) {
         
         // Create a progress counter
         let processed = 0;
-        const total = rubyFiles.length;
+        const total = filesToSearch.length;
+        
+        // Define batch size for parallel processing
+        const BATCH_SIZE = 50;
         
         // Process files in batches to avoid blocking the UI
-        for (const file of rubyFiles) {
-            // Update progress
-            processed++;
-            if (processed % 50 === 0) {
-                console.log(`Processed ${processed}/${total} files...`);
-            }
+        for (let i = 0; i < filesToSearch.length; i += BATCH_SIZE) {
+            const batch = filesToSearch.slice(i, i + BATCH_SIZE);
             
-            const filePath = path.join(rootPath, file);
-            if (!fs.existsSync(filePath)) {
-                continue;
-            }
-            
-            // Read file content
-            const content = fs.readFileSync(filePath, 'utf8');
-            
-            // Find all matches in the file
-            let match;
-            searchRegex.lastIndex = 0; // Reset regex index
-            
-            // Use a line-by-line approach to get accurate line and column numbers
-            const lines = content.split('\n');
-            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-                const line = lines[lineIndex];
-                searchRegex.lastIndex = 0; // Reset for each line
-                
-                while ((match = searchRegex.exec(line)) !== null) {
-                    // Skip if it's part of a longer identifier
-                    const prevChar = line[match.index - 1];
-                    const nextChar = line[match.index + match[0].length];
-                    
-                    const isValidBoundary = (
-                        (prevChar === undefined || !/[a-zA-Z0-9_]/.test(prevChar)) &&
-                        (nextChar === undefined || !/[a-zA-Z0-9_]/.test(nextChar))
-                    );
-                    
-                    if (isValidBoundary) {
-                        references.push({
-                            filePath,
-                            line: lineIndex,
-                            column: match.index
-                        });
-                    }
+            // Process batch in parallel
+            await Promise.all(batch.map(async (file) => {
+                // Update progress
+                processed++;
+                if (processed % 20 === 0) {
+                    console.log(`Processed ${processed}/${total} files...`);
                 }
-            }
+                
+                const filePath = path.join(rootPath, file);
+                if (!fs.existsSync(filePath)) {
+                    return; // Skip this file
+                }
+                
+                try {
+                    // Skip large files
+                    const stats = fs.statSync(filePath);
+                    if (stats.size > 1024 * 1024) { // Skip files larger than 1MB
+                        console.log(`Skipping large file: ${file} (${Math.round(stats.size / 1024)}KB)`);
+                        return;
+                    }
+                    
+                    // Use cached content if available
+                    let content;
+                    if (fileContentCache.has(filePath)) {
+                        content = fileContentCache.get(filePath);
+                    } else {
+                        content = fs.readFileSync(filePath, 'utf8');
+                        // Cache file content if not too large
+                        if (content.length < 500000) { // ~500KB
+                            fileContentCache.set(filePath, content);
+                        }
+                    }
+                    
+                    // Quick check if word exists in the file at all
+                    if (!content.includes(word)) {
+                        return; // Skip files that don't contain the word
+                    }
+                    
+                    // Find all matches in the file
+                    let match;
+                    searchRegex.lastIndex = 0; // Reset regex index
+                    
+                    // Use a line-by-line approach to get accurate line and column numbers
+                    const lines = content.split('\n');
+                    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+                        const line = lines[lineIndex];
+                        searchRegex.lastIndex = 0; // Reset for each line
+                        
+                        while ((match = searchRegex.exec(line)) !== null) {
+                            // Skip if it's part of a longer identifier
+                            const prevChar = line[match.index - 1];
+                            const nextChar = line[match.index + match[0].length];
+                            
+                            const isValidBoundary = (
+                                (prevChar === undefined || !/[a-zA-Z0-9_]/.test(prevChar)) &&
+                                (nextChar === undefined || !/[a-zA-Z0-9_]/.test(nextChar))
+                            );
+                            
+                            if (isValidBoundary) {
+                                references.push({
+                                    filePath,
+                                    line: lineIndex,
+                                    column: match.index
+                                });
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error(`Error processing file ${file}:`, error);
+                }
+            }));
+            
+            // Allow UI to refresh between batches
+            await new Promise(resolve => setTimeout(resolve, 0));
         }
         
         console.log(`Found ${references.length} references to '${word}'`);
+        
+        // Manage cache size
+        if (fileContentCache.size > 100) {
+            const keys = Array.from(fileContentCache.keys());
+            for (let i = 0; i < 30; i++) { // Remove 30 oldest entries
+                fileContentCache.delete(keys[i]);
+            }
+        }
+        
+        if (referenceSearchCache.size > 30) {
+            const keys = Array.from(referenceSearchCache.keys());
+            for (let i = 0; i < 10; i++) { // Remove 10 oldest entries
+                referenceSearchCache.delete(keys[i]);
+            }
+        }
+        
+        // Cache this search result
+        referenceSearchCache.set(cacheKey, references);
+        
         return references;
     } catch (error) {
         console.error('Error in findAllReferences:', error);
