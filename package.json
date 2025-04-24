@@ -1,0 +1,111 @@
+{
+  "name": "rails-goto-definition",
+  "displayName": "Rails Go To Definition",
+  "description": "Navigate to Rails class, method, and model definitions",
+  "version": "0.3.0",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:ruby",
+    "onCommand:rails-goto-definition.goToDefinition",
+    "onCommand:rails-goto-definition.peekDefinition",
+    "onCommand:rails-goto-definition.findAllReferences"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rails-goto-definition.goToDefinition",
+        "title": "Find Method Definition"
+      },
+      {
+        "command": "rails-goto-definition.peekDefinition",
+        "title": "Peek Method Definition"
+      },
+      {
+        "command": "rails-goto-definition.findAllReferences",
+        "title": "Find All References"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "when": "editorLangId == ruby",
+          "command": "rails-goto-definition.goToDefinition",
+          "title": "Find Method Definition",
+          "group": "navigation@1"
+        },
+        {
+          "when": "editorLangId == ruby",
+          "command": "rails-goto-definition.peekDefinition",
+          "title": "Peek Method Definition",
+          "group": "navigation@2"
+        },
+        {
+          "when": "editorLangId == ruby",
+          "command": "rails-goto-definition.findAllReferences",
+          "title": "Find All References",
+          "group": "navigation@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "when": "resourceLangId == ruby",
+          "command": "rails-goto-definition.goToDefinition",
+          "title": "Find Method Definition",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "node ./test/runTest.js",
+    "build": "webpack",
+    "vscode:prepublish": "npm run lint && npm run build"
+  },
+  "extensionDependencies": [],
+  "bundledDependencies": [
+    "glob"
+  ],
+  "devDependencies": {
+    "@types/glob": "^7.1.4",
+    "@types/mocha": "^9.0.0",
+    "@types/node": "14.x",
+    "@types/vscode": "^1.60.0",
+    "eslint": "^7.32.0",
+    "glob": "^7.1.7",
+    "mocha": "^9.1.1",
+    "typescript": "^4.4.3",
+    "vscode-test": "^1.6.1",
+    "webpack": "^5.99.6",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "glob": "^7.1.7"
+  },
+  "keywords": [
+    "ruby",
+    "rails",
+    "definition",
+    "navigation"
+  ],
+  "author": {
+    "name": "Rails Developer"
+  },
+  "publisher": "rails-tools",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rails-tools/rails-goto-definition-extension"
+  },
+  "bundleDependencies": [
+    "glob"
+  ]
+}
