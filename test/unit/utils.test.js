@@ -1,7 +1,9 @@
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
-const extension = require('../../extension');
+
+// Use the test helper that properly mocks VSCode API
+const extension = require('./test-helper');
 
 // Create test fixtures directory and files if they don't exist
 before(function() {

@@ -3,11 +3,11 @@ const proxyquire = require('proxyquire');
 const path = require('path');
 const fs = require('fs');
 
-// Mock the vscode API
-const vscodeMock = require('./vscode.mock');
+// Mock the vscode API using our common test helper
+const extension = require('./test-helper');
 
 describe('Rails Scopes', function() {
-  let extension;
+  let testExtension;
   
   before(function() {
     // Create mocks
@@ -25,16 +25,15 @@ describe('Rails Scopes', function() {
       existsSync: (path) => true
     };
     
-    // Load the extension with our mocks
-    extension = proxyquire('../../extension', {
-      'vscode': vscodeMock,
+    // Load the extension with our specific file mocks
+    testExtension = proxyquire('./test-helper', {
       'fs': fsMock
     });
   });
   
   describe('Scope Detection', function() {
     it('should find regular scope definitions', async function() {
-      const result = await extension.findInFile(
+      const result = await testExtension.findInFile(
         './test/fixtures/app/models/product.rb', 
         'active', 
         'scope'
@@ -45,7 +44,7 @@ describe('Rails Scopes', function() {
     });
     
     it('should find scope with parameters', async function() {
-      const result = await extension.findInFile(
+      const result = await testExtension.findInFile(
         './test/fixtures/app/models/product.rb', 
         'matching_value', 
         'scope'
@@ -56,7 +55,7 @@ describe('Rails Scopes', function() {
     });
     
     it('should find scope with whitespace after colon', async function() {
-      const result = await extension.findInFile(
+      const result = await testExtension.findInFile(
         './test/fixtures/app/models/product.rb', 
         'premium', 
         'scope'
@@ -67,7 +66,7 @@ describe('Rails Scopes', function() {
     });
     
     it('should find scope with special characters', async function() {
-      const result = await extension.findInFile(
+      const result = await testExtension.findInFile(
         './test/fixtures/app/models/product.rb', 
         'discontinued?', 
         'scope'
@@ -81,7 +80,7 @@ describe('Rails Scopes', function() {
   describe('Scope Search in findMethod', function() {
     it('should find scope via findMethod', async function() {
       // This test ensures the scope checks are properly integrated in findMethod
-      const result = await extension.findMethod(
+      const result = await testExtension.findMethod(
         './test/fixtures', 
         'matching_value',
         './test/fixtures/app/models/product.rb'
