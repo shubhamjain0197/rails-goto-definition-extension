@@ -1,4 +1,31 @@
+# Dependencies
 node_modules/
-.vscode-test/
-.DS_Store
+
+# Build output
 dist/
+
+# VS Code specific
+.vscode-test/
+.vscode/
+*.vsix
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Test & Coverage files
+coverage/
+.nyc_output/
+coverage.lcov
+coverage-report.md
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+temp-*
+
+# Editor backup files
+*~
+*.bak
+*.swp
