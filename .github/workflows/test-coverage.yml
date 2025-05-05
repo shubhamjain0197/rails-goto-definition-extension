@@ -35,12 +35,12 @@ jobs:
       run: npm run coverage
     
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.lcov
         flags: unittests
         name: codecov-umbrella
-        slug: ${{ github.repository }}
+        slug: shubhamjain0197/rails-goto-definition-extension
         verbose: true
         fail_ci_if_error: false
