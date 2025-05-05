@@ -19,8 +19,15 @@ This extension helps you navigate to:
 - Controller definitions (e.g., `UsersController`)
 - Helper modules (e.g., `ApplicationHelper`)
 - Standard Ruby class definitions
-- Method definitions
+- Method definitions (including methods with special characters like `?` and `!`)
+- Rails model scopes (e.g., `scope :active`, `scope :offline_hours?`)
 - Variable references
+
+### Enhanced Features
+
+- **Special Character Support**: Navigate to methods with `?` and `!` characters (e.g., `active?`, `save!`)
+- **Scope Information**: When jumping to a method, see which class/module it belongs to in the status bar
+- **Rails Scope Support**: Find and navigate to Rails model scope definitions
 
 ## Requirements
 
@@ -65,11 +72,22 @@ The extension uses string-based pattern matching to locate definitions, followin
 - For controllers, it looks in `app/controllers/[controller_name]_controller.rb`
 - For helpers, it looks in `app/helpers/[helper_name]_helper.rb`
 - For methods, it searches for `def method_name` and `attr_accessor`, `attr_reader`, or `attr_writer` declarations
+  - Includes special handling for methods with special characters like `?` and `!` (e.g., `offline_hours?`, `save!`)
+- For Rails model scopes, it searches for `scope :[scope_name]` declarations in model files
 - For general class definitions, it searches through Ruby files for `class ClassName` or `module ModuleName`
+
+### Scope Detection
+
+When navigating to definitions, the extension now provides scope information:
+
+- When a method is found, the extension identifies which class or module contains it
+- This scope information (e.g., `Found 'full_name' in User`) appears in the status bar
+- For nested classes and modules, the full nesting path is shown
 
 ### Reference Finding
 
 When finding references, the extension:
+
 1. Scans for exact word matches with appropriate word boundaries
 2. Handles different patterns based on whether it's a class, method, or variable
 3. Presents all matches in the VS Code References panel for easy navigation
@@ -100,6 +118,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - **0.1.0**: Initial release with basic Go to Definition functionality
 - **0.2.0**: Added Peek Method Definition feature and improved dependency management
 - **0.3.0**: Added Find All References and Find References in Current File features
+- **0.3.1**: Enhanced method detection with special character support (`?` and `!`), added scope information display, and added Rails model scope definition support
 
 ## License
 
