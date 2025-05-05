@@ -33,4 +33,4 @@
 
 ---
 
-Generated for GitHub Actions integration
+Generated for GitHub Actions and Codecov integration
