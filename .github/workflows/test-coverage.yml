@@ -36,12 +36,11 @@ jobs:
     
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v3
-      # Only run if the token is available (for PRs from forks)
-      if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       with:
-        # Make token optional for public repos
-        token: ${{ secrets.CODECOV_TOKEN || '' }}
+        token: ${{ secrets.CODECOV_TOKEN }}
         file: ./coverage.lcov
         flags: unittests
         name: codecov-umbrella
+        slug: ${{ github.repository }}
+        verbose: true
         fail_ci_if_error: false
