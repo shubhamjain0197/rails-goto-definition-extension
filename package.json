@@ -85,8 +85,9 @@
     "test": "node ./test/runTest.js",
     "unit-test": "mocha test/unit/**/*.test.js",
     "coverage-test": "mocha test/unit/extension.coverage.js",
-    "custom-coverage": "node ./test/unit/runUnitTests.js",
-    "coverage": "nyc report --reporter=text-lcov > coverage.lcov",
+    "test-unit": "mocha test/unit/**/*.test.js",
+    "coverage": "nyc npm run test-unit && nyc report --reporter=text-lcov > coverage.lcov",
+    "coverage-report": "nyc report --reporter=text-summary --reporter=html",
     "build": "webpack",
     "vscode:prepublish": "npm run lint && npm run build"
   },

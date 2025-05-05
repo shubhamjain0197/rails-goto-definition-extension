@@ -1,5 +1,7 @@
 # Rails Go To Definition
 
+[![Test Coverage](https://codecov.io/gh/shubhamjain0197/rails-goto-definition-extension/branch/main/graph/badge.svg)](https://codecov.io/gh/shubhamjain0197/rails-goto-definition-extension)
+
 A Visual Studio Code extension that helps Ruby on Rails developers navigate to class, model, and method definitions in their projects, enhancing development productivity.
 
 ## Features
