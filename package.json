@@ -14,7 +14,9 @@
     "onLanguage:ruby",
     "onCommand:rails-goto-definition.goToDefinition",
     "onCommand:rails-goto-definition.peekDefinition",
-    "onCommand:rails-goto-definition.findAllReferences"
+    "onCommand:rails-goto-definition.findAllReferences",
+    "onCommand:rails-goto-definition.findReferencesInFile",
+    "onCommand:rails-goto-definition.goToAssociation"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -30,6 +32,14 @@
       {
         "command": "rails-goto-definition.findAllReferences",
         "title": "Find All References"
+      },
+      {
+        "command": "rails-goto-definition.findReferencesInFile",
+        "title": "Find References in Current File"
+      },
+      {
+        "command": "rails-goto-definition.goToAssociation",
+        "title": "Go To Associated Model"
       }
     ],
     "menus": {
@@ -51,6 +61,12 @@
           "command": "rails-goto-definition.findAllReferences",
           "title": "Find All References",
           "group": "navigation@3"
+        },
+        {
+          "when": "editorLangId == ruby",
+          "command": "rails-goto-definition.findReferencesInFile",
+          "title": "Find References in Current File",
+          "group": "navigation@4"
         }
       ],
       "explorer/context": [
@@ -67,8 +83,31 @@
     "lint": "eslint .",
     "pretest": "npm run lint",
     "test": "node ./test/runTest.js",
+    "unit-test": "mocha test/unit/**/*.test.js",
+    "coverage-test": "mocha test/unit/extension.coverage.js",
+    "custom-coverage": "node ./test/unit/runUnitTests.js",
+    "coverage": "nyc report --reporter=text-lcov > coverage.lcov",
     "build": "webpack",
     "vscode:prepublish": "npm run lint && npm run build"
+  },
+  "nyc": {
+    "extension": [
+      ".js"
+    ],
+    "exclude": [
+      "**/test/**",
+      "**/node_modules/**"
+    ],
+    "reporter": [
+      "text",
+      "html"
+    ],
+    "all": true,
+    "check-coverage": true,
+    "statements": 70,
+    "branches": 70,
+    "functions": 70,
+    "lines": 70
   },
   "extensionDependencies": [],
   "bundledDependencies": [
@@ -82,12 +121,15 @@
     "eslint": "^7.32.0",
     "glob": "^7.1.7",
     "mocha": "^9.1.1",
+    "nyc": "^17.1.0",
+    "proxyquire": "^2.1.3",
     "typescript": "^4.4.3",
     "vscode-test": "^1.6.1",
     "webpack": "^5.99.6",
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
     "glob": "^7.1.7"
   },
   "keywords": [

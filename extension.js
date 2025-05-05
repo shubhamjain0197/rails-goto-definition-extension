@@ -6,15 +6,86 @@ const glob = require('glob');
 // Extensions of files to search
 const RUBY_FILE_EXTENSIONS = ['.rb', '.rake', '.builder', '.jbuilder'];
 
+/**
+ * Helper function to escape special characters in a string for use in a regular expression
+ * @param {string} string - String to escape
+ * @returns {string} - Escaped string safe for regex
+ */
+function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+}
+
 // Regular expressions for finding definitions
 const PATTERNS = {
     CLASS: 'class\\s+([A-Z][\\w:]*)\\b',
     MODULE: 'module\\s+([A-Z][\\w:]*)\\b',
+    // Allow methods with special characters like ? and !
     METHOD: '\\bdef\\s+([\\w_?!]+)\\b',
+    // Allow class methods with special characters like ? and !
+    CLASS_METHOD: '\\bdef\\s+self\\s*\\.\\s*([\\w_?!]+)\\b', // Class methods with def self.method_name
     ATTR: '\\battr_(?:accessor|reader|writer)\\s+:([\\w_?!]+)\\b',
     VARIABLE: '\\b([a-z_][a-zA-Z0-9_]*)\\b',
     METHOD_CALL: '\\b([a-z_][a-zA-Z0-9_?!]*)\\('   // Method calls with parentheses
 };
+
+/**
+ * Find references to the word at cursor position in the current file only
+ */
+async function findReferencesInFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        vscode.window.showInformationMessage('No active editor');
+        return;
+    }
+
+    const document = editor.document;
+    if (document.languageId !== 'ruby') {
+        vscode.window.showInformationMessage('Not a Ruby file');
+        return;
+    }
+
+    const position = editor.selection.active;
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) {
+        vscode.window.showInformationMessage('No word at cursor position');
+        return;
+    }
+
+    const word = document.getText(wordRange);
+    const currentFilePath = document.uri.fsPath;
+    console.log(`Finding references to '${word}' in current file only`);
+
+    try {
+        // Call findAllReferences with currentFileOnly=true
+        const references = await findAllReferences(word, currentFilePath, true);
+        
+        if (references && references.length > 0) {
+            // Convert references to VS Code locations
+            const locations = references.map(ref => {
+                const uri = vscode.Uri.file(ref.filePath);
+                const position = new vscode.Position(ref.line, ref.column);
+                const range = new vscode.Range(position, position.translate(0, word.length));
+                return new vscode.Location(uri, range);
+            });
+
+            // Show references in the references view
+            await vscode.commands.executeCommand(
+                'editor.action.showReferences',
+                document.uri,
+                position,
+                locations
+            );
+            
+            console.log(`Successfully showed ${references.length} references in current file`);
+        } else {
+            console.log(`No references found for: ${word} in current file`);
+            vscode.window.showInformationMessage(`No references found for "${word}" in current file`);
+        }
+    } catch (error) {
+        console.error('Error in find references in file command:', error);
+        throw error;
+    }
+}
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -31,7 +102,9 @@ function activate(context) {
         })
     );
     
-    // Function to handle find all references request
+    /**
+     * Handle find all references request
+     */
     async function handleFindAllReferencesRequest() {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -54,16 +127,25 @@ function activate(context) {
             return;
         }
         
+        console.log(`Finding references for word: '${word}'`);
+        
         try {
             // Show progress while searching
-            vscode.window.withProgress({
+            await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: `Searching for references to "${word}"...`,
                 cancellable: true
             }, async (progress, token) => {
+                // Make sure we have valid parameters before calling findAllReferences
+                if (!word) {
+                    console.error('Invalid word parameter for findAllReferences');
+                    vscode.window.showErrorMessage('Error: Invalid search term');
+                    return;
+                }
+                
                 const references = await findAllReferences(word, document.fileName);
                 
-                if (references.length === 0) {
+                if (!references || references.length === 0) {
                     vscode.window.showInformationMessage(`No references found for "${word}"`);
                     return;
                 }
@@ -90,6 +172,101 @@ function activate(context) {
         } catch (error) {
             console.error('Error in findAllReferences command:', error);
             vscode.window.showErrorMessage(`Error finding references: ${error.message}`);
+        }
+    }
+    
+    /**
+     * Handle navigation to associated models
+     */
+    async function handleAssociationNavigation() {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                console.log('No active editor found');
+                return;
+            }
+            
+            const document = editor.document;
+            const position = editor.selection.active;
+            const wordRange = document.getWordRangeAtPosition(position);
+            
+            if (!wordRange) {
+                console.log('No word found at current position');
+                vscode.window.showInformationMessage('No word found at current position');
+                return;
+            }
+            
+            const word = document.getText(wordRange);
+            console.log(`Searching for association: ${word}`);
+            
+            // First, determine if we're in a model file
+            const filename = path.basename(document.fileName);
+            const isModelFile = document.fileName.includes('/app/models/') || 
+                               filename.endsWith('.rb') && !filename.includes('_controller') && 
+                               !filename.includes('_helper') && !filename.includes('_job');
+            
+            if (!isModelFile) {
+                console.log('Not in a model file, cannot navigate to association');
+                vscode.window.showInformationMessage('Association navigation only works in model files');
+                return;
+            }
+            
+            // Try to determine the current model name from the file path
+            const modelName = path.basename(document.fileName, '.rb');
+            if (!modelName) {
+                console.log('Could not determine model name');
+                vscode.window.showInformationMessage('Could not determine model name');
+                return;
+            }
+            
+            // Get workspace root
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (!workspaceFolders || workspaceFolders.length === 0) {
+                console.log('No workspace folder found');
+                vscode.window.showInformationMessage('No workspace folder found');
+                return;
+            }
+            
+            const rootPath = workspaceFolders[0].uri.fsPath;
+            
+            // Find the associated model
+            const association = await findAssociatedModel(rootPath, modelName, word);
+            
+            if (association) {
+                console.log(`Found association: ${association.filePath}:${association.line} (${association.associationType})`);
+                
+                try {
+                    const associationUri = vscode.Uri.file(association.filePath);
+                    const associationDocument = await vscode.workspace.openTextDocument(associationUri);
+                    
+                    // Create position at line and character 0
+                    const associationPosition = new vscode.Position(association.line, 0);
+                    
+                    // Navigate to the associated model
+                    const associationEditor = await vscode.window.showTextDocument(associationDocument);
+                    
+                    // Set selection at position
+                    associationEditor.selection = new vscode.Selection(associationPosition, associationPosition);
+                    
+                    // Show the line in the middle of the editor
+                    associationEditor.revealRange(
+                        new vscode.Range(associationPosition, associationPosition),
+                        vscode.TextEditorRevealType.InCenter
+                    );
+                    
+                    console.log('Successfully navigated to associated model');
+                    vscode.window.showInformationMessage(`Navigated to ${association.associationType} association: ${word}`);
+                } catch (docError) {
+                    console.error('Error opening associated model document:', docError);
+                    vscode.window.showErrorMessage(`Error opening associated model: ${docError.message}`);
+                }
+            } else {
+                console.log(`No association found for: ${word}`);
+                vscode.window.showInformationMessage(`No association found for "${word}"`);
+            }
+        } catch (error) {
+            console.error('Error in association navigation command:', error);
+            vscode.window.showErrorMessage(`Error navigating to association: ${error.message}`);
         }
     }
     
@@ -124,6 +301,13 @@ function activate(context) {
             
             if (definition) {
                 console.log(`Definition found: ${definition.filePath}:${definition.line}`);
+                
+                // Show scope information if available (class/module the method belongs to)
+                if (definition.scope) {
+                    const scopeMessage = `Found '${word}' in ${definition.scope}`;
+                    vscode.window.setStatusBarMessage(scopeMessage, 5000); // Show for 5 seconds
+                    console.log(scopeMessage);
+                }
                 
                 try {
                     const definitionUri = vscode.Uri.file(definition.filePath);
@@ -188,14 +372,36 @@ function activate(context) {
     // Register the command to handle the right-click "Find All References" option
     console.log('Registering rails-goto-definition.findAllReferences command');
     let referencesDisposable = vscode.commands.registerCommand('rails-goto-definition.findAllReferences', async function () {
-        console.log('rails-goto-definition.findAllReferences command executed');
-        await handleFindAllReferencesRequest();
+        try {
+            await handleFindAllReferencesRequest();
+        } catch (error) {
+            console.error('Error in find all references command:', error);
+            vscode.window.showErrorMessage(`Error finding references: ${error.message}`);
+        }
+    });
+
+    let fileReferencesDisposable = vscode.commands.registerCommand('rails-goto-definition.findReferencesInFile', async function () {
+        try {
+            await findReferencesInFile();
+        } catch (error) {
+            console.error('Error in find references in file command:', error);
+            vscode.window.showErrorMessage(`Error finding references in file: ${error.message}`);
+        }
+    });
+
+    // Register the command to navigate to associated models
+    console.log('Registering rails-goto-definition.goToAssociation command');
+    let associationDisposable = vscode.commands.registerCommand('rails-goto-definition.goToAssociation', async function () {
+        console.log('rails-goto-definition.goToAssociation command executed');
+        await handleAssociationNavigation();
     });
     
     // Add commands to context subscriptions
     context.subscriptions.push(disposable);
     context.subscriptions.push(peekDisposable);
     context.subscriptions.push(referencesDisposable);
+    context.subscriptions.push(fileReferencesDisposable);
+    context.subscriptions.push(associationDisposable);
     
     console.log('Rails Go To Definition extension successfully registered commands');
     
@@ -203,7 +409,6 @@ function activate(context) {
         // Export any public API if needed
     };
 }
-
 /**
  * Find the definition of a Rails class, model, or method
  * @param {string} name - The name to find
@@ -228,6 +433,13 @@ async function findRailsDefinition(name, currentFilePath) {
             if (methodMatch) {
                 console.log(`Found method '${name}' in current file`);
                 return methodMatch;
+            }
+            
+            // Check for attr_accessor, attr_reader, attr_writer
+            const attrMatch = await findInFile(currentFilePath, `\\battr_(?:accessor|reader|writer)\\s+:${name}\\b`, 'custom');
+            if (attrMatch) {
+                console.log(`Found attribute '${name}' in current file`);
+                return attrMatch;
             }
         }
 
@@ -254,20 +466,36 @@ async function findRailsDefinition(name, currentFilePath) {
             searchPromises.push(findClass(rootPath, name));
             
             // Rails-specific conventions
-            if (!name.endsWith('Controller') && !name.endsWith('Helper')) {
+            if (!name.endsWith('Controller') && !name.endsWith('Helper') && 
+                !name.endsWith('Mailer') && !name.endsWith('Job')) {
                 searchPromises.push(findModel(rootPath, name));
+                searchPromises.push(findConcern(rootPath, name));
             }
+            
+            // Controllers
             if (name.endsWith('Controller') || !name.includes('Controller')) {
                 searchPromises.push(findController(rootPath, name));
             }
+            
+            // Helpers
             if (name.endsWith('Helper') || !name.includes('Helper')) {
                 searchPromises.push(findHelper(rootPath, name));
+            }
+            
+            // Mailers
+            if (name.endsWith('Mailer') || !name.includes('Mailer')) {
+                searchPromises.push(findMailer(rootPath, name));
+            }
+            
+            // Jobs
+            if (name.endsWith('Job') || !name.includes('Job')) {
+                searchPromises.push(findJob(rootPath, name));
             }
         }
         
         if (isPossibleMethodName) {
             // Look for method definitions throughout the project
-            searchPromises.push(findMethod(rootPath, name));
+            searchPromises.push(findMethod(rootPath, name, currentFilePath));
         }
 
         // Execute all searches in parallel
@@ -289,11 +517,11 @@ async function findRailsDefinition(name, currentFilePath) {
 }
 
 /**
- * Helper function to find a pattern in a file and return the line number
+ * Helper function to find a pattern in a file and return the line number and scope (class/module)
  * @param {string} filePath - Path to the file to search
  * @param {string} searchTerm - Term to search for
- * @param {string} type - Type of definition to search for ('class', 'module', 'method', or 'attr')
- * @returns {Promise<{filePath: string, line: number} | null>}
+ * @param {string} type - Type of definition to search for ('class', 'module', 'method', 'class_method', or 'attr')
+ * @returns {Promise<{filePath: string, line: number, scope?: string} | null>} - Returns file path, line, and scope (class/module) if applicable
  */
 async function findInFile(filePath, searchTerm, type) {
     if (!fs.existsSync(filePath)) {
@@ -315,6 +543,9 @@ async function findInFile(filePath, searchTerm, type) {
             case 'method':
                 pattern = PATTERNS.METHOD;
                 break;
+            case 'class_method':
+                pattern = PATTERNS.CLASS_METHOD;
+                break;
             case 'attr':
                 pattern = PATTERNS.ATTR;
                 break;
@@ -322,17 +553,51 @@ async function findInFile(filePath, searchTerm, type) {
                 // Custom pattern - assume searchTerm is already a regex pattern
                 pattern = searchTerm;
         }
-        
+
         let regex;
-        if (type === 'class' || type === 'module') {
+
+        // For method searches, we need to handle special characters like ? and ! carefully
+        if (type === 'method' || type === 'class_method' || type === 'attr') {
+            // Create a more specific pattern with word boundaries that allows special Ruby method characters
+            const safeSearchTerm = escapeRegExp(searchTerm);
+            console.log(`Searching for ${type} with name '${searchTerm}' (escaped: '${safeSearchTerm}')`);
+            
+            let regexPattern;
+            
+            // IMPORTANT: For methods with special characters like ?, we need simpler patterns
+            if (type === 'method') {
+                if (searchTerm.endsWith('?') || searchTerm.endsWith('!')) {
+                    // DON'T use word boundaries for ? methods as they break the regex
+                    // Just search for 'def method_name?' directly
+                    regexPattern = `def\\s+${safeSearchTerm}`;
+                } else {
+                    regexPattern = `def\\s+${safeSearchTerm}\\b`;
+                }
+            } else if (type === 'class_method') {
+                if (searchTerm.endsWith('?') || searchTerm.endsWith('!')) {
+                    regexPattern = `def\\s+self\\s*\\.\\s*${safeSearchTerm}`;
+                } else {
+                    regexPattern = `def\\s+self\\s*\\.\\s*${safeSearchTerm}\\b`;
+                }
+            } else { // attr
+                regexPattern = `attr_(?:accessor|reader|writer)\\s+:${safeSearchTerm}\\b`;
+            }
+            
+            // Create the final regex - use case-insensitive for all patterns
+            regex = new RegExp(regexPattern, 'i');
+            
+            // Output detailed logs for debugging
+            console.log(`DEBUG - Using regex pattern: ${regexPattern}`);
+            console.log(`DEBUG - Final regex object: ${regex.toString()}`);
+            console.log(`DEBUG - File content length: ${content.length} bytes`);
+            
+            // Search the first 100 chars of content for debugging
+            const previewContent = content.substring(0, Math.min(100, content.length));
+            console.log(`DEBUG - Content preview: ${previewContent.replace(/\n/g, '\\n')}...`);
+            
+        } else if (type === 'class' || type === 'module') {
             // For classes/modules, look for an exact match of the name
-            regex = new RegExp(pattern.replace('([A-Z][\\w:]*)', searchTerm), 'i');
-        } else if (type === 'method') {
-            // For methods, allow word boundary matching
-            regex = new RegExp(pattern.replace('([\\w_?!]+)', searchTerm), 'i');
-        } else if (type === 'attr') {
-            // For attributes
-            regex = new RegExp(pattern.replace('([\\w_?!]+)', searchTerm), 'i');
+            regex = new RegExp(pattern.replace('([A-Z][\\w:]*)', escapeRegExp(searchTerm)), 'i');
         } else {
             // Custom pattern
             regex = new RegExp(pattern, 'i');
@@ -343,7 +608,34 @@ async function findInFile(filePath, searchTerm, type) {
         if (match) {
             // Calculate line number
             const lineNumber = content.substring(0, match.index).split('\n').length - 1;
-            return { filePath, line: lineNumber };
+            
+            // Detect scope (class/module) for methods
+            let scope = null;
+            if (type === 'method' || type === 'class_method' || type === 'attr') {
+                // For methods, determine which class/module it belongs to
+                // Look backwards in the content to find most recent class/module definition
+                const contentUpToMatch = content.substring(0, match.index);
+                
+                // Find all class and module definitions before this method
+                const classMatches = [...contentUpToMatch.matchAll(/class\s+([A-Z][\w:]*)/g)];
+                const moduleMatches = [...contentUpToMatch.matchAll(/module\s+([A-Z][\w:]*)/g)];
+                
+                // Combine and sort by position
+                const scopeMatches = [...classMatches, ...moduleMatches].sort((a, b) => b.index - a.index);
+                
+                if (scopeMatches.length > 0) {
+                    // Get the closest scope before the method
+                    const closestScope = scopeMatches[0];
+                    scope = closestScope[1]; // Capture group for the class/module name
+                    console.log(`Found method '${searchTerm}' in scope: ${scope}`);
+                }
+            }
+            
+            return { 
+                filePath, 
+                line: lineNumber,
+                scope: scope // Will be null for non-method types or if no scope was found
+            };
         }
     } catch (error) {
         console.error(`Error searching in file ${filePath}:`, error);
@@ -483,18 +775,58 @@ async function findModel(rootPath, modelName) {
 
 /**
  * Helper function to attempt to convert a word to singular form
- * This is a very basic implementation - doesn't handle all Ruby/Rails cases
+ * Enhanced implementation based on common Rails/ActiveSupport inflection rules
  */
 function inflectToSingular(word) {
     if (!word) return word;
     
-    // Very basic rules - would need more comprehensive rules for production
+    // Already singular?
+    if (!word.endsWith('s')) return word;
+    
+    // Handle irregular plurals
+    const irregulars = {
+        'people': 'person',
+        'children': 'child',
+        'men': 'man',
+        'women': 'woman',
+        'mice': 'mouse',
+        'geese': 'goose',
+        'feet': 'foot',
+        'teeth': 'tooth',
+        'oxen': 'ox',
+        'vertices': 'vertex',
+        'indices': 'index',
+        'matrices': 'matrix',
+        'aliases': 'alias',
+        'statuses': 'status',
+        'crises': 'crisis',
+        'analyses': 'analysis',
+        'diagnoses': 'diagnosis',
+        'theses': 'thesis',
+        'phenomena': 'phenomenon',
+        'criteria': 'criterion',
+        'data': 'datum'
+    };
+    
+    const lowercaseWord = word.toLowerCase();
+    if (irregulars[lowercaseWord]) {
+        return irregulars[lowercaseWord];
+    }
+    
+    // Handle common suffixes
     if (word.endsWith('ies')) {
-        return word.substring(0, word.length - 3) + 'y';
+        return word.slice(0, -3) + 'y';
+    } else if (word.endsWith('ves')) {
+        return word.slice(0, -3) + 'f';
+    } else if (word.endsWith('xes') || word.endsWith('ches') || word.endsWith('sses') || word.endsWith('shes')) {
+        return word.slice(0, -2);
     } else if (word.endsWith('es')) {
-        return word.substring(0, word.length - 2);
-    } else if (word.endsWith('s') && !word.endsWith('ss')) {
-        return word.substring(0, word.length - 1);
+        if (word.endsWith('oes') && word.length > 3) {
+            return word.slice(0, -2);
+        }
+        return word.slice(0, -1);
+    } else if (word.endsWith('s') && !word.endsWith('ss') && !word.endsWith('is')) {
+        return word.slice(0, -1);
     }
     
     return word;
@@ -502,17 +834,61 @@ function inflectToSingular(word) {
 
 /**
  * Helper function to attempt to convert a word to plural form
- * This is a very basic implementation - doesn't handle all Ruby/Rails cases
+ * Enhanced implementation based on common Rails/ActiveSupport inflection rules
  */
 function inflectToPlural(word) {
     if (!word) return word;
     
-    // Very basic rules - would need more comprehensive rules for production
+    // Handle irregular plurals
+    const irregulars = {
+        'person': 'people',
+        'child': 'children',
+        'man': 'men',
+        'woman': 'women',
+        'mouse': 'mice',
+        'goose': 'geese',
+        'foot': 'feet',
+        'tooth': 'teeth',
+        'ox': 'oxen',
+        'vertex': 'vertices',
+        'index': 'indices',
+        'matrix': 'matrices',
+        'alias': 'aliases',
+        'status': 'statuses',
+        'crisis': 'crises',
+        'analysis': 'analyses',
+        'diagnosis': 'diagnoses',
+        'thesis': 'theses',
+        'phenomenon': 'phenomena',
+        'criterion': 'criteria',
+        'datum': 'data'
+    };
+    
+    const lowercaseWord = word.toLowerCase();
+    if (irregulars[lowercaseWord]) {
+        return irregulars[lowercaseWord];
+    }
+    
+    // Handle words that are already plural
+    if ((word.endsWith('s') && !word.endsWith('ss') && !word.endsWith('us') && !word.endsWith('is')) ||
+        word.endsWith('ese') || word.endsWith('ose') || word.endsWith('ice')) {
+        return word;
+    }
+    
+    // Handle common suffix rules
     if (word.endsWith('y') && !isVowel(word.charAt(word.length - 2))) {
-        return word.substring(0, word.length - 1) + 'ies';
+        return word.slice(0, -1) + 'ies';
+    } else if (word.endsWith('f')) {
+        return word.slice(0, -1) + 'ves';
+    } else if (word.endsWith('fe')) {
+        return word.slice(0, -2) + 'ves';
+    } else if (word.endsWith('o') && !isVowel(word.charAt(word.length - 2))) {
+        return word + 'es';
     } else if (word.endsWith('s') || word.endsWith('x') || word.endsWith('z') || 
                word.endsWith('ch') || word.endsWith('sh')) {
         return word + 'es';
+    } else if (word.endsWith('is')) {
+        return word.slice(0, -2) + 'es';
     } else {
         return word + 's';
     }
@@ -715,10 +1091,26 @@ async function findMethod(rootPath, methodName, currentFilePath) {
     // First check the current file for the method - highest priority
     if (currentFilePath && fs.existsSync(currentFilePath)) {
         console.log(`Checking current file first: ${currentFilePath}`);
+        
+        // Check for instance method
         const methodMatch = await findInFile(currentFilePath, methodName, 'method');
         if (methodMatch) {
-            console.log(`Found method '${methodName}' in current file`);
+            console.log(`Found instance method '${methodName}' in current file`);
             return methodMatch;
+        }
+        
+        // Check for class method (def self.method_name)
+        const classMethodMatch = await findInFile(currentFilePath, methodName, 'class_method');
+        if (classMethodMatch) {
+            console.log(`Found class method 'self.${methodName}' in current file`);
+            return classMethodMatch;
+        }
+        
+        // Check for attribute accessor
+        const attrMatch = await findInFile(currentFilePath, methodName, 'attr');
+        if (attrMatch) {
+            console.log(`Found attribute '${methodName}' in current file`);
+            return attrMatch;
         }
     }
     
@@ -771,11 +1163,21 @@ async function findMethod(rootPath, methodName, currentFilePath) {
     
     // Search for both standard method definition and attr_* declarations
     for (const filePath of candidateFiles) {
-        // Standard method definition
+        // Skip the current file as we've already checked it
+        if (filePath === currentFilePath) continue;
+        
+        // Look for regular instance method definition
         const methodMatch = await findInFile(filePath, methodName, 'method');
         if (methodMatch) {
-            console.log(`Found method '${methodName}' in ${filePath}`);
+            console.log(`Found instance method '${methodName}' in ${filePath}`);
             return methodMatch;
+        }
+        
+        // Look for class method definition (def self.method_name)
+        const classMethodMatch = await findInFile(filePath, methodName, 'class_method');
+        if (classMethodMatch) {
+            console.log(`Found class method 'self.${methodName}' in ${filePath}`);
+            return classMethodMatch;
         }
         
         // Attribute accessor/reader/writer
@@ -803,6 +1205,11 @@ const referenceSearchCache = new Map();
  */
 async function findAllReferences(word, currentFilePath, currentFileOnly = false) {
     try {
+        // Validate required parameters
+        if (!word) {
+            console.error('findAllReferences called with undefined or empty word parameter');
+            return [];
+        }
         // Check cache for previous searches
         const cacheKey = `${word}-${currentFileOnly ? 'file' : 'project'}-${currentFileOnly ? currentFilePath : ''}`;
         if (referenceSearchCache.has(cacheKey)) {
@@ -968,9 +1375,350 @@ async function findAllReferences(word, currentFilePath, currentFileOnly = false)
     }
 }
 
+/**
+ * Find a mailer definition in the project
+ * @param {string} rootPath - Project root path
+ * @param {string} mailerName - Mailer name to find
+ * @returns {Promise<{filePath: string, line: number} | null>}
+ */
+async function findMailer(rootPath, mailerName) {
+    console.log(`Searching for mailer '${mailerName}'`);
+    
+    // Determine the mailer name format
+    let searchName = mailerName;
+    if (!mailerName.endsWith('Mailer')) {
+        searchName = `${mailerName}Mailer`;
+    }
+    
+    // Determine the file name (snake_case)
+    const fileBaseName = searchName
+        .replace(/Mailer$/, '')
+        .replace(/([A-Z])/g, (match, letter, offset) => {
+            return (offset > 0 ? '_' : '') + letter.toLowerCase();
+        });
+    
+    const mailerPath = path.join(rootPath, 'app/mailers', `${fileBaseName}_mailer.rb`);
+    console.log(`Checking mailer path: ${mailerPath}`);
+    
+    if (fs.existsSync(mailerPath)) {
+        // First look for exact class name match
+        const mailerDefinition = await findInFile(mailerPath, `class\\s+${searchName}\\b`, 'custom');
+        if (mailerDefinition) {
+            console.log(`Found mailer '${searchName}' in ${mailerPath}`);
+            return mailerDefinition;
+        }
+        
+        // If not found, look for any class definition
+        const anyClassDefinition = await findInFile(mailerPath, PATTERNS.CLASS, 'custom');
+        if (anyClassDefinition) {
+            console.log(`Found mailer class definition in ${mailerPath}`);
+            return anyClassDefinition;
+        }
+        
+        // If file exists but no definition found, return first line
+        console.log(`Mailer file exists but no class definition found, returning first line: ${mailerPath}`);
+        return { filePath: mailerPath, line: 0 };
+    }
+    
+    // Check if mailer is in the application_mailer.rb file
+    const applicationMailerPath = path.join(rootPath, 'app/mailers/application_mailer.rb');
+    if (fs.existsSync(applicationMailerPath)) {
+        const mailerDefinition = await findInFile(applicationMailerPath, `class\\s+${searchName}\\b`, 'custom');
+        if (mailerDefinition) {
+            console.log(`Found mailer '${searchName}' in application_mailer.rb`);
+            return mailerDefinition;
+        }
+    }
+    
+    // Look in non-standard locations
+    const rubyFiles = glob.sync('app/**/*.rb', { cwd: rootPath });
+    const mailerPattern = `class\\s+${searchName}\\b`;
+    
+    for (const file of rubyFiles) {
+        // Skip already checked files
+        if (file === `app/mailers/${fileBaseName}_mailer.rb` || file === 'app/mailers/application_mailer.rb') {
+            continue;
+        }
+        
+        const filePath = path.join(rootPath, file);
+        const match = await findInFile(filePath, mailerPattern, 'custom');
+        if (match) {
+            console.log(`Found mailer '${searchName}' in non-standard location: ${file}`);
+            return match;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Find a concern module definition in the project
+ * @param {string} rootPath - Project root path
+ * @param {string} concernName - Concern name to find
+ * @returns {Promise<{filePath: string, line: number} | null>}
+ */
+async function findConcern(rootPath, concernName) {
+    console.log(`Searching for concern '${concernName}'`);
+    
+    // Look in standard Rails concern locations
+    const concernLocations = [
+        'app/controllers/concerns',
+        'app/models/concerns',
+        'app/helpers/concerns'
+    ];
+    
+    // Determine the file name (snake_case)
+    const fileBaseName = concernName.replace(/([A-Z])/g, (match, letter, offset) => {
+        return (offset > 0 ? '_' : '') + letter.toLowerCase();
+    });
+    
+    // Look in all concern directories
+    for (const location of concernLocations) {
+        const concernPath = path.join(rootPath, location, `${fileBaseName}.rb`);
+        console.log(`Checking concern path: ${concernPath}`);
+        
+        if (fs.existsSync(concernPath)) {
+            // First look for module definition
+            const moduleDefinition = await findInFile(concernPath, `module\\s+${concernName}\\b`, 'custom');
+            if (moduleDefinition) {
+                console.log(`Found concern module '${concernName}' in ${concernPath}`);
+                return moduleDefinition;
+            }
+            
+            // If not found as module, look for class definition
+            const classDefinition = await findInFile(concernPath, `class\\s+${concernName}\\b`, 'custom');
+            if (classDefinition) {
+                console.log(`Found concern class '${concernName}' in ${concernPath}`);
+                return classDefinition;
+            }
+            
+            // If file exists but no definition found, return first line
+            console.log(`Concern file exists but no module/class definition found, returning first line: ${concernPath}`);
+            return { filePath: concernPath, line: 0 };
+        }
+    }
+    
+    // Look for concerns in non-standard locations
+    const rubyFiles = glob.sync('app/**/*.rb', { cwd: rootPath });
+    const concernPattern = `(?:module|class)\\s+${concernName}\\b`;
+    
+    for (const file of rubyFiles) {
+        // Skip files we've already checked
+        let skipFile = false;
+        for (const location of concernLocations) {
+            if (file === `${location}/${fileBaseName}.rb`) {
+                skipFile = true;
+                break;
+            }
+        }
+        if (skipFile) continue;
+        
+        const filePath = path.join(rootPath, file);
+        const match = await findInFile(filePath, concernPattern, 'custom');
+        if (match) {
+            console.log(`Found concern '${concernName}' in non-standard location: ${file}`);
+            return match;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Find a job class definition in the project
+ * @param {string} rootPath - Project root path
+ * @param {string} jobName - Job name to find
+ * @returns {Promise<{filePath: string, line: number} | null>}
+ */
+async function findJob(rootPath, jobName) {
+    console.log(`Searching for job '${jobName}'`);
+    
+    // Determine the job name format
+    let searchName = jobName;
+    if (!jobName.endsWith('Job')) {
+        searchName = `${jobName}Job`;
+    }
+    
+    // Determine the file name (snake_case)
+    const fileBaseName = searchName
+        .replace(/Job$/, '')
+        .replace(/([A-Z])/g, (match, letter, offset) => {
+            return (offset > 0 ? '_' : '') + letter.toLowerCase();
+        });
+    
+    const jobPath = path.join(rootPath, 'app/jobs', `${fileBaseName}_job.rb`);
+    console.log(`Checking job path: ${jobPath}`);
+    
+    if (fs.existsSync(jobPath)) {
+        // First look for exact class name match
+        const jobDefinition = await findInFile(jobPath, `class\\s+${searchName}\\b`, 'custom');
+        if (jobDefinition) {
+            console.log(`Found job '${searchName}' in ${jobPath}`);
+            return jobDefinition;
+        }
+        
+        // If not found, look for any class definition
+        const anyClassDefinition = await findInFile(jobPath, PATTERNS.CLASS, 'custom');
+        if (anyClassDefinition) {
+            console.log(`Found job class definition in ${jobPath}`);
+            return anyClassDefinition;
+        }
+        
+        // If file exists but no definition found, return first line
+        console.log(`Job file exists but no class definition found, returning first line: ${jobPath}`);
+        return { filePath: jobPath, line: 0 };
+    }
+    
+    // Check if job is in the application_job.rb file
+    const applicationJobPath = path.join(rootPath, 'app/jobs/application_job.rb');
+    if (fs.existsSync(applicationJobPath)) {
+        const jobDefinition = await findInFile(applicationJobPath, `class\\s+${searchName}\\b`, 'custom');
+        if (jobDefinition) {
+            console.log(`Found job '${searchName}' in application_job.rb`);
+            return jobDefinition;
+        }
+    }
+    
+    // Look in non-standard locations
+    const rubyFiles = glob.sync('app/**/*.rb', { cwd: rootPath });
+    const jobPattern = `class\\s+${searchName}\\b`;
+    
+    for (const file of rubyFiles) {
+        // Skip already checked files
+        if (file === `app/jobs/${fileBaseName}_job.rb` || file === 'app/jobs/application_job.rb') {
+            continue;
+        }
+        
+        const filePath = path.join(rootPath, file);
+        const match = await findInFile(filePath, jobPattern, 'custom');
+        if (match) {
+            console.log(`Found job '${searchName}' in non-standard location: ${file}`);
+            return match;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Find an associated model based on relationship declarations
+ * @param {string} rootPath - Project root path
+ * @param {string} modelName - Source model name
+ * @param {string} associationName - Association name to find
+ * @returns {Promise<{filePath: string, line: number, associationType: string} | null>}
+ */
+async function findAssociatedModel(rootPath, modelName, associationName) {
+    console.log(`Searching for association '${associationName}' from model '${modelName}'`);
+    
+    // First, find the model file
+    const possibleNames = [
+        modelName,
+        modelName.toLowerCase(),
+        inflectToSingular(modelName),
+        inflectToPlural(modelName)
+    ];
+    
+    let modelPath = null;
+    let modelContent = null;
+    
+    // Try to find the model file
+    for (const name of possibleNames) {
+        const potentialPath = path.join(rootPath, 'app/models', `${name.toLowerCase()}.rb`);
+        if (fs.existsSync(potentialPath)) {
+            modelPath = potentialPath;
+            modelContent = fs.readFileSync(potentialPath, 'utf8');
+            break;
+        }
+    }
+    
+    if (!modelPath || !modelContent) {
+        console.log(`Could not find model file for '${modelName}'`);
+        return null;
+    }
+    
+    // Define patterns for common association types
+    const associationPatterns = [
+        { type: 'belongs_to', pattern: `belongs_to\\s+:${associationName}\\b` },
+        { type: 'has_many', pattern: `has_many\\s+:${associationName}\\b` },
+        { type: 'has_one', pattern: `has_one\\s+:${associationName}\\b` },
+        { type: 'has_and_belongs_to_many', pattern: `has_and_belongs_to_many\\s+:${associationName}\\b` }
+    ];
+    
+    // Look for the association in the model file
+    let associationType = null;
+    let lineNumber = -1;
+    
+    for (const { type, pattern } of associationPatterns) {
+        const regex = new RegExp(pattern, 'i');
+        const match = modelContent.match(regex);
+        
+        if (match) {
+            associationType = type;
+            lineNumber = modelContent.substring(0, match.index).split('\n').length - 1;
+            break;
+        }
+    }
+    
+    if (!associationType) {
+        console.log(`No association '${associationName}' found in model '${modelName}'`);
+        return null;
+    }
+    
+    // Try to determine the target model class based on association type and Rails conventions
+    let targetModelName = null;
+    
+    if (associationType === 'belongs_to') {
+        // belongs_to uses singular form
+        targetModelName = inflectToSingular(associationName);
+        // If association is plural, Rails would singularize it internally
+        targetModelName = targetModelName.charAt(0).toUpperCase() + targetModelName.slice(1);
+    } else {
+        // has_many, has_one, has_and_belongs_to_many use singular form of the target model
+        targetModelName = inflectToSingular(associationName);
+        // If association is plural, Rails would singularize it internally
+        targetModelName = targetModelName.charAt(0).toUpperCase() + targetModelName.slice(1);
+    }
+    
+    // Check for class_name option in the association
+    const classNameMatch = modelContent.match(new RegExp(`${associationType}\\s+:${associationName}[^\\n]*class_name[^\\n]*["']([^"']+)["']`, 'i'));
+    if (classNameMatch && classNameMatch[1]) {
+        targetModelName = classNameMatch[1];
+    }
+    
+    console.log(`Looking for target model: ${targetModelName}`);
+    
+    // Find the target model
+    const targetModelMatch = await findModel(rootPath, targetModelName);
+    if (targetModelMatch) {
+        return {
+            ...targetModelMatch,
+            associationType
+        };
+    }
+    
+    return null;
+}
+
 function deactivate() {}
 
+// For production usage, we only export activate and deactivate
 module.exports = {
     activate,
-    deactivate
+    deactivate,
+    // The following exports are for testing only
+    findRailsDefinition,
+    findInFile,
+    findClass,
+    findModel,
+    findController,
+    findHelper,
+    findMethod,
+    findAllReferences,
+    findMailer,
+    findConcern,
+    findJob,
+    findAssociatedModel,
+    inflectToSingular,
+    inflectToPlural,
+    isVowel
 };
