@@ -174,6 +174,6 @@ suite('Extension Test Suite', () => {
     assert.strictEqual(extension.inflectToPlural('post'), 'posts');
     
     // Test already plural words
-    assert.strictEqual(extension.inflectToPlural('users'), 'userses');
+    assert.strictEqual(extension.inflectToPlural('users'), 'users');
   });
 });

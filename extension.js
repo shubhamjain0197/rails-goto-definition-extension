@@ -25,7 +25,8 @@ const PATTERNS = {
     CLASS_METHOD: '\\bdef\\s+self\\s*\\.\\s*([\\w_?!]+)\\b', // Class methods with def self.method_name
     ATTR: '\\battr_(?:accessor|reader|writer)\\s+:([\\w_?!]+)\\b',
     VARIABLE: '\\b([a-z_][a-zA-Z0-9_]*)\\b',
-    METHOD_CALL: '\\b([a-z_][a-zA-Z0-9_?!]*)\\('   // Method calls with parentheses
+    METHOD_CALL: '\\b([a-z_][a-zA-Z0-9_?!]*)\\(',   // Method calls with parentheses
+    SCOPE: '\\bscope\\s+:\\s*([\\w_?!]+)'  // Rails model scopes with flexible colon spacing
 };
 
 /**
@@ -549,6 +550,9 @@ async function findInFile(filePath, searchTerm, type) {
             case 'attr':
                 pattern = PATTERNS.ATTR;
                 break;
+            case 'scope':
+                pattern = PATTERNS.SCOPE;
+                break;
             default:
                 // Custom pattern - assume searchTerm is already a regex pattern
                 pattern = searchTerm;
@@ -557,7 +561,7 @@ async function findInFile(filePath, searchTerm, type) {
         let regex;
 
         // For method searches, we need to handle special characters like ? and ! carefully
-        if (type === 'method' || type === 'class_method' || type === 'attr') {
+        if (type === 'method' || type === 'class_method' || type === 'attr' || type === 'scope') {
             // Create a more specific pattern with word boundaries that allows special Ruby method characters
             const safeSearchTerm = escapeRegExp(searchTerm);
             console.log(`Searching for ${type} with name '${searchTerm}' (escaped: '${safeSearchTerm}')`);
@@ -579,6 +583,18 @@ async function findInFile(filePath, searchTerm, type) {
                 } else {
                     regexPattern = `def\\s+self\\s*\\.\\s*${safeSearchTerm}\\b`;
                 }
+            } else if (type === 'scope') {
+                // Handle scope definitions with special characters
+                // Matches patterns like: scope :matching_value_from_list, ->(key, *values) { ... }
+                // Allow flexible spacing around the colon
+                if (searchTerm.endsWith('?') || searchTerm.endsWith('!')) {
+                    regexPattern = `scope\\s+:\\s*${safeSearchTerm}`;
+                } else {
+                    regexPattern = `scope\\s+:\\s*${safeSearchTerm}\\b`;
+                }
+                // Add extra debug logging for scope searches
+                console.log(`DEBUG - Searching for scope with pattern: ${regexPattern}`);
+                console.log(`DEBUG - This matches 'scope :${searchTerm}' or 'scope : ${searchTerm}'`);
             } else { // attr
                 regexPattern = `attr_(?:accessor|reader|writer)\\s+:${safeSearchTerm}\\b`;
             }
@@ -1112,6 +1128,13 @@ async function findMethod(rootPath, methodName, currentFilePath) {
             console.log(`Found attribute '${methodName}' in current file`);
             return attrMatch;
         }
+        
+        // Check for Rails scope definition
+        const scopeMatch = await findInFile(currentFilePath, methodName, 'scope');
+        if (scopeMatch) {
+            console.log(`Found scope '${methodName}' in current file`);
+            return scopeMatch;
+        }
     }
     
     // Find candidate files to search in order of likelihood
@@ -1185,6 +1208,13 @@ async function findMethod(rootPath, methodName, currentFilePath) {
         if (attrMatch) {
             console.log(`Found attribute '${methodName}' in ${filePath}`);
             return attrMatch;
+        }
+        
+        // Rails scope definition (Model.scope method)
+        const scopeMatch = await findInFile(filePath, methodName, 'scope');
+        if (scopeMatch) {
+            console.log(`Found Rails scope '${methodName}' in ${filePath}`);
+            return scopeMatch;
         }
     }
     

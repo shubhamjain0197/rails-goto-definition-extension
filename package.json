@@ -2,7 +2,7 @@
   "name": "rails-goto-definition",
   "displayName": "Rails Go To Definition",
   "description": "Navigate to Rails class, method, and model definitions",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "engines": {
     "vscode": "^1.60.0"
   },
